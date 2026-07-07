@@ -1,0 +1,6 @@
+{
+  "artifactType":  "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
+  "summary":  "This artifact outlines the full architectural blueprint, folder structure, database models, API design, AI fallback management system, smart autofill architecture, and verification plan for ApplySense AI. It serves as the master specification for constructing the career operating system.",
+  "updatedAt":  "2026-06-09T07:14:53.892568100Z",
+  "requestFeedback":  true
+}

@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "ApplySense AI - Smart Job Engine",
+  "version": "1.0.0",
+  "description": "Auto-scrapes job details, displays match scores, and autofills forms on Workday, Lever, Greenhouse, and Ashby.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "https://*.lever.co/*",
+    "https://*.greenhouse.io/*",
+    "https://*.ashbyhq.com/*",
+    "https://*.linkedin.com/*",
+    "https://*.indeed.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.lever.co/*",
+        "https://*.greenhouse.io/*",
+        "https://*.ashbyhq.com/*",
+        "https://*.linkedin.com/jobs/*",
+        "https://*.indeed.com/jobs/*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ]
+}
