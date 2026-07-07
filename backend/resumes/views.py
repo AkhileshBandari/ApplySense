@@ -3,7 +3,7 @@ import logging
 from rest_framework import views, status, permissions, generics
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
-
+from django.shortcuts import get_object_or_404
 from .models import Resume
 from .serializers import ResumeSerializer
 from .parser import (
@@ -111,3 +111,65 @@ class ResumeListView(generics.ListAPIView):
 
     def get_queryset(self):
         return Resume.objects.filter(user=self.request.user).order_by("-created_at")
+
+class ResumeDetailView(views.APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, pk):
+        resume = get_object_or_404(
+            Resume,
+            pk=pk,
+            user=request.user
+        )
+
+        return Response(
+            ResumeSerializer(resume).data,
+            status=status.HTTP_200_OK
+        )
+
+class ResumeTailorView(views.APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        resume_id = request.data.get("resume_id")
+        job_description = request.data.get("job_description")
+
+        if not resume_id or not job_description:
+            return Response(
+                {
+                    "error": "resume_id and job_description are required"
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        resume = get_object_or_404(
+            Resume,
+            pk=resume_id,
+            user=request.user,
+        )
+
+        ai = AIFallbackManager()
+
+        try:
+            result = ai.generate_content(
+                prompts.RESUME_TAILOR_SYSTEM_PROMPT,
+                f"""
+Resume:
+{resume.parsed_text}
+
+Job Description:
+{job_description}
+""",
+                response_format_json=True,
+            )
+
+            return Response(
+                {"tailored_resume": result},
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

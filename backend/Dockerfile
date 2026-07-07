@@ -1,1 +1,25 @@
-"FROM python:3.10-slim\n\n# Prevent Python from writing .pyc files and enable unbuffered output\nENV PYTHONDONTWRITEBYTECODE=1\nENV PYTHONUNBUFFERED=1\n\nWORKDIR /app\n\n# Install system dependencies needed for Playwright and Postgres\nRUN apt-get update && apt-get install -y --no-install-recommends \\\n    build-essential \\\n    libpq-dev \\\n    curl \\\n    git \\\n    && rm -rf /var/lib/apt/lists/*\n\n# Install python requirements\nCOPY requirements.txt /app/\nRUN pip install --no-cache-dir -r requirements.txt\n\n# Install Playwright browser dependencies (specifically chromium for scraping)\nRUN playwright install-deps chromium \\\n    && playwright install chromium\n\n# Copy code\nCOPY . /app/\n\nEXPOSE 8000\n\nCMD [\"python\", \"manage.py\", \"runserver\", \"0.0.0.0:8000\"]\n"
+FROM python:3.10-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+RUN playwright install-deps chromium \
+    && playwright install chromium
+
+COPY . /app/
+
+EXPOSE 8000
+
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
