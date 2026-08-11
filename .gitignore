@@ -67,3 +67,28 @@ dump.rdb
 build/
 out/
 release/
+# Generated / development artifacts
+*.pb
+*.pbtxt
+installation_id
+installed_version.json
+transcript.jsonl
+webm_encoder.exe
+
+# Temporary development files
+fix_tests.py
+fix_users.py
+sanity_search.txt
+
+# Metadata
+*.metadata.json
+
+# Test output
+frontend/playwright-report/
+frontend/test-results/
+
+# Celery generated state
+backend/celerybeat-schedule
+
+# Archives / generated artifacts
+backend/services/career_ops.zip
