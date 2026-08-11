@@ -19,6 +19,8 @@ class AuthTests(APITestCase):
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertIn('tokens', response.data)
+        self.assertIn('access_token', response.data['tokens'])
+        self.assertIn('refresh_token', response.data['tokens'])
         
         # Verify user exists
         user = User.objects.get(email='candidate@test.com')

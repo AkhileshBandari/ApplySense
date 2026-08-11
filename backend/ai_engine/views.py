@@ -31,8 +31,8 @@ class BaseCoachView(APIView):
                 cleaned = cleaned[:-3]
             cleaned = cleaned.strip()
             return json.loads(cleaned)
-        except Exception:
-            return {"raw_output": response_text}
+        except Exception as e:
+            raise ValueError("AI provider returned malformed JSON") from e
 
 
 # ----------------------------------------------------------------------
@@ -50,98 +50,23 @@ class ResumeParseView(BaseCoachView):
         system_prompt = prompts.RESUME_PARSE_SYSTEM_PROMPT
         user_prompt = prompts.RESUME_PARSE_USER_PROMPT.format(resume_text=resume_text)
 
-        ai_response = self.ai.generate_content(
-            system_prompt,
-            user_prompt,
-            response_format_json=True,
-        )
-        parsed = self.parse_ai_json(ai_response)
-        return Response(parsed, status=status.HTTP_200_OK)
+        try:
+            ai_response = self.ai.generate_content(
+                system_prompt,
+                user_prompt,
+                response_format_json=True,
+            )
+            parsed = self.parse_ai_json(ai_response)
+            return Response(parsed, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 # ----------------------------------------------------------------------
 # Skill Gap Analysis
 # ----------------------------------------------------------------------
-class SkillGapAnalysisView(BaseCoachView):
-    def post(self, request):
-        resume_text = request.data.get("resume_text", "")
-        target_role = request.data.get("target_role", "")
 
-        if not resume_text or not target_role:
-            return Response(
-                {
-                    "error": "resume_text and target_role are required"
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        ai_response = self.ai.generate_content(
-            prompts.COACH_SKILL_GAP_SYSTEM_PROMPT,
-            f"""
-Resume:
-{resume_text}
-
-Target Role:
-{target_role}
-""",
-            response_format_json=True,
-        )
-
-        return Response(
-            self.parse_ai_json(ai_response),
-            status=status.HTTP_200_OK,
-        )
-
-
-
-class LearningRoadmapView(BaseCoachView):
-    def post(self, request):
-        missing_skills = request.data.get("missing_skills", [])
-
-        if not missing_skills:
-            return Response(
-                {
-                    "error": "missing_skills is required"
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        ai_response = self.ai.generate_content(
-            prompts.COACH_ROADMAP_SYSTEM_PROMPT,
-            f"Missing Skills: {missing_skills}",
-            response_format_json=True,
-        )
-
-        return Response(
-            self.parse_ai_json(ai_response),
-            status=status.HTTP_200_OK,
-        )
-
-
-
-    def post(self, request):
-        role = request.data.get("role", "")
-        experience = request.data.get("experience", "")
-
-        if not role:
-            return Response(
-                {
-                    "error": "role is required"
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        ai_response = self.ai.generate_content(
-            prompts.INTERVIEW_PREP_SYSTEM_PROMPT,
-            f"""
-Role: {role}
-Experience: {experience}
-""",
-            response_format_json=True,
-        )
-
-        return Response(
-            self.parse_ai_json(ai_response),
-            status=status.HTTP_200_OK,
-        )
 
 class InterviewPrepView(BaseCoachView):
     def post(self, request):
@@ -169,9 +94,8 @@ Generate interview preparation guidance.
                 self.parse_ai_json(ai_response),
                 status=status.HTTP_200_OK,
             )
-
         except Exception as e:
             return Response(
                 {"error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status=status.HTTP_502_BAD_GATEWAY,
             )

@@ -1,0 +1,142 @@
+from django.db import models
+from django.conf import settings
+from jobs.models import Job
+from resumes.models import ResumeVersion
+
+class Application(models.Model):
+    STATUS_CHOICES = (
+        # Preparation & Submission
+        ('DRAFT', 'Draft'),
+        ('PREPARING', 'Preparing'),
+        ('REVIEW_REQUIRED', 'Review Required'),
+        ('READY_TO_SUBMIT', 'Ready to Submit'),
+        ('SUBMITTING', 'Submitting'),
+        ('SUBMITTED', 'Submitted'),
+        ('APPLICATION_FAILED', 'Application Failed'),
+        ('WITHDRAWN', 'Withdrawn'),
+        
+        # Post-Submission (ATS Tracking)
+        ('UNDER_REVIEW', 'Under Review'),
+        ('ASSESSMENT', 'Assessment'),
+        ('INTERVIEW', 'Interview'),
+        ('FINAL_ROUND', 'Final Round'),
+        ('OFFER', 'Offer'),
+        ('REJECTED', 'Rejected'),
+        ('ACCEPTED', 'Accepted'),
+        ('DECLINED', 'Declined'),
+        ('UNKNOWN', 'Unknown'),
+        
+        # Legacy/Compatibility mappings
+        ('Saved', 'Saved'),
+        ('Applied', 'Applied'),
+    )
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='applications')
+    job = models.ForeignKey(Job, on_delete=models.SET_NULL, null=True, blank=True, related_name='applications')
+    
+    # Metadata for snapshot/manual entry decoupling
+    company = models.CharField(max_length=255, blank=True, null=True)
+    role = models.CharField(max_length=255, blank=True, null=True)
+    source = models.CharField(max_length=100, default='Custom')
+    application_provider = models.CharField(max_length=100, blank=True, null=True)
+    application_mode = models.CharField(max_length=50, blank=True, null=True)
+    
+    resume_version = models.ForeignKey(ResumeVersion, on_delete=models.SET_NULL, null=True, blank=True, related_name='applications')
+    snapshot = models.JSONField(null=True, blank=True, help_text="Immutable snapshot of Job, ResumeVersion, and CandidateContext at submission")
+    
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='DRAFT')
+    preparation_status = models.CharField(max_length=30, blank=True, null=True)
+    submission_status = models.CharField(max_length=30, blank=True, null=True)
+    
+    application_url = models.URLField(max_length=500, blank=True, null=True)
+    external_identifier = models.CharField(max_length=100, blank=True, null=True)
+    
+    match_score = models.IntegerField(default=0)
+    match_details = models.JSONField(null=True, blank=True)
+    
+    applied_at = models.DateTimeField(null=True, blank=True)
+    prepared_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    last_status_change_at = models.DateTimeField(auto_now_add=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # We cannot strictly unique_together user and job anymore because job might be null for manual 
+        # or we might allow multiple applications if one failed/withdrawn.
+        # So we remove unique_together = ('user', 'job')
+        pass
+
+    def __str__(self):
+        return f"{self.user.email} -> {self.role or (self.job.title if self.job else 'Unknown')} ({self.status})"
+
+class ApplicationStatusHistory(models.Model):
+    application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name='status_history')
+    previous_status = models.CharField(max_length=30)
+    new_status = models.CharField(max_length=30)
+    source = models.CharField(max_length=50) # USER, SYSTEM, EXTENSION, ATS, IMPORT
+    reason = models.TextField(blank=True, null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.application.id}: {self.previous_status} -> {self.new_status}"
+
+class ApplicationQuestion(models.Model):
+    application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name='questions')
+    question_key = models.CharField(max_length=100) # Normalized canonical key
+    question_text = models.TextField()
+    question_type = models.CharField(max_length=50) # TEXT, BOOLEAN, SINGLE_SELECT, etc
+    category = models.CharField(max_length=50, blank=True, null=True)
+    required = models.BooleanField(default=False)
+    options = models.JSONField(null=True, blank=True)
+    source_field_identifier = models.CharField(max_length=200, blank=True, null=True) # ID from ATS DOM
+    
+    answer = models.TextField(blank=True, null=True)
+    answer_source = models.CharField(max_length=50, blank=True, null=True) # VERIFIED_PROFILE, ANSWER_MEMORY, USER_ENTERED, SYSTEM_DERIVED, UNANSWERED
+    review_status = models.CharField(max_length=50, default='PENDING') # AUTO_RESOLVED, REVIEW_RECOMMENDED, USER_INPUT_REQUIRED, BLOCKED, APPROVED
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Q: {self.question_key} (App: {self.application.id})"
+
+class ApplicationAnswerMemory(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='answer_memory')
+    question_key = models.CharField(max_length=100)
+    canonical_category = models.CharField(max_length=50, blank=True, null=True)
+    answer = models.TextField()
+    answer_type = models.CharField(max_length=50, default='TEXT')
+    source = models.CharField(max_length=50, default='USER_ENTERED')
+    verification_status = models.CharField(max_length=50, default='UNVERIFIED')
+    
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('user', 'question_key')
+
+    def __str__(self):
+        return f"Memory: {self.question_key} ({self.user.email})"
+
+
+class Interview(models.Model):
+    application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name='interviews')
+    stage = models.CharField(max_length=100) # Technical, HR, System Design, etc.
+    scheduled_at = models.DateTimeField()
+    location_type = models.CharField(max_length=50, default='Virtual') # Virtual, On-Site
+    video_url = models.URLField(blank=True, null=True)
+    notes = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"Interview for {self.application.role or 'Role'} - {self.stage}"
+
+class ApplicationNote(models.Model):
+    application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name='notes')
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Note on {self.application.id} at {self.created_at}"

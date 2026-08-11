@@ -1,1 +1,22 @@
-"FROM node:18-alpine AS build\n\nWORKDIR /app\n\nCOPY package.json ./\nRUN npm install\n\nCOPY . .\nRUN npm run build\n\n# Stage 2: Serve using Nginx\nFROM nginx:alpine\n\n# Copy built artifacts\nCOPY --from=build /app/dist /usr/share/nginx/html\n\n# Custom Nginx config to support SPA routing if needed\nRUN echo 'server { listen 80; location / { root /usr/share/nginx/html; index index.html; try_files $uri $uri/ /index.html; } }' > /etc/nginx/conf.d/default.conf\n\nEXPOSE 80\n\nCMD [\"nginx\", \"-g\", \"daemon off;\"]\n"
+FROM node:18-alpine AS build
+
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install --legacy-peer-deps
+
+COPY . .
+RUN npm run build
+
+# Stage 2: Serve using Nginx
+FROM nginx:alpine
+
+# Copy built artifacts
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Custom Nginx config to support SPA routing if needed
+RUN echo 'server { listen 80; location / { root /usr/share/nginx/html; index index.html; try_files $uri $uri/ /index.html; } }' > /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

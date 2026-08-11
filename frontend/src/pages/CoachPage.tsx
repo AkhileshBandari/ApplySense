@@ -1,197 +1,239 @@
-import { useState } from 'react';
-import { mockRoadmap, mockInterviewPrep } from '../utils/mockData';
-import { Sparkles, CheckSquare, GraduationCap, FileQuestion, Lightbulb, Compass, Award } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Sparkles, MessageSquare, Plus, Loader2, Info } from 'lucide-react';
+import api from '../services/api';
 
+export default function CoachPage() {
+    const [threads, setThreads] = useState<any[]>([]);
+    const [activeThreadId, setActiveThreadId] = useState<number | null>(null);
+    const [messages, setMessages] = useState<any[]>([]);
+    const [loadingThreads, setLoadingThreads] = useState(false);
+    const [loadingMessages, setLoadingMessages] = useState(false);
+    const [sending, setSending] = useState(false);
+    const [input, setInput] = useState('');
+    const messagesEndRef = useRef<HTMLDivElement>(null);
 
-interface CoachPageProps {
-    apiMode: 'mock' | 'live';
-}
+    useEffect(() => {
+        fetchThreads();
+    }, []);
 
-export default function CoachPage({ apiMode }: CoachPageProps) {
-    const [targetRole, setTargetRole] = useState('Senior DevOps & Infrastructure Engineer');
-    const [loading, setLoading] = useState(false);
-    const [roadmap, setRoadmap] = useState(mockRoadmap);
-    const [prep, setPrep] = useState(mockInterviewPrep);
-    const [gapsChecked, setGapsChecked] = useState(false);
-
-    const handleRunCoach = () => {
-        if (!targetRole) return;
-        setLoading(true);
-
-        if (apiMode === 'live') {
-            fetch('http://localhost:8000/api/coach/roadmap/', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('applysense_token')}`,
-                },
-                body: JSON.stringify({ missing_skills: ['Kubernetes', 'Next.js'] }),
-            })
-                .then(res => res.json())
-                .then(data => {
-                    setRoadmap(data.length ? data : mockRoadmap);
-                })
-                .catch(() => setRoadmap(mockRoadmap));
-
-            fetch('http://localhost:8000/api/coach/interview-prep/', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('applysense_token')}`,
-                },
-                body: JSON.stringify({ resume_text: 'Senior Full Stack', job_description: targetRole }),
-            })
-                .then(res => res.json())
-                .then(data => {
-                    setPrep(data.behavioral_questions ? data : mockInterviewPrep);
-                    setLoading(false);
-                    setGapsChecked(true);
-                })
-                .catch(() => {
-                    setPrep(mockInterviewPrep);
-                    setLoading(false);
-                    setGapsChecked(true);
-                });
+    useEffect(() => {
+        if (activeThreadId) {
+            fetchMessages(activeThreadId);
         } else {
-            setRoadmap(mockRoadmap);
-            setPrep(mockInterviewPrep);
-            setLoading(false);
-            setGapsChecked(true);
+            setMessages([]);
+        }
+    }, [activeThreadId]);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    const fetchThreads = async () => {
+        setLoadingThreads(true);
+        try {
+            const res = await api.get('/api/copilot/threads/');
+            setThreads(res.data);
+            if (res.data.length > 0 && !activeThreadId) {
+                setActiveThreadId(res.data[0].id);
+            }
+        } catch (err) {
+            console.error('Failed to fetch threads:', err);
+        } finally {
+            setLoadingThreads(false);
+        }
+    };
+
+    const fetchMessages = async (threadId: number) => {
+        setLoadingMessages(true);
+        try {
+            const res = await api.get(`/api/copilot/threads/${threadId}/messages/`);
+            setMessages(res.data);
+        } catch (err) {
+            console.error('Failed to fetch messages:', err);
+        } finally {
+            setLoadingMessages(false);
+        }
+    };
+
+    const handleNewThread = async () => {
+        try {
+            const res = await api.post('/api/copilot/threads/', { title: 'New Career Conversation' });
+            setThreads([res.data, ...threads]);
+            setActiveThreadId(res.data.id);
+        } catch (err) {
+            console.error('Failed to create thread:', err);
+        }
+    };
+
+    const handleSend = async () => {
+        if (!input.trim() || sending) return;
+
+        let threadId = activeThreadId;
+        if (!threadId) {
+            try {
+                const res = await api.post('/api/copilot/threads/', { title: input.substring(0, 30) + '...' });
+                threadId = res.data.id;
+                setThreads([res.data, ...threads]);
+                setActiveThreadId(threadId);
+            } catch (err) {
+                console.error('Failed to create thread before sending:', err);
+                return;
+            }
+        }
+
+        const userMsg = {
+            id: Date.now(), // temp id
+            role: 'USER',
+            content: input
+        };
+        setMessages(prev => [...prev, userMsg]);
+        setInput('');
+        setSending(true);
+
+        try {
+            await api.post(`/api/copilot/threads/${threadId}/messages/`, { content: userMsg.content });
+            // Re-fetch messages or just append. Safer to re-fetch to get exact DB state.
+            if (threadId !== null) {
+                await fetchMessages(threadId);
+            }
+        } catch (err) {
+            console.error('Failed to send message:', err);
+            setMessages(prev => [...prev, {
+                id: Date.now(),
+                role: 'SYSTEM',
+                content: 'Failed to send message. Please try again.'
+            }]);
+        } finally {
+            setSending(false);
         }
     };
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                <div>
-                    <div className="inline-flex items-center gap-2 rounded-full bg-cardHover px-3 py-1 text-sm font-semibold text-white">
-                        <Sparkles className="h-4 w-4" /> AI Coach
-                    </div>
-                    <h1 className="mt-4 text-3xl font-semibold text-white">Career Growth Assistant</h1>
-                    <p className="mt-2 max-w-2xl text-sm text-slate-300">
-                        Get a tailored upskilling roadmap, interview prep, and career guidance for your target role.
-                    </p>
-                </div>
+        <div className="flex h-[calc(100vh-6rem)] gap-6">
+            {/* Sidebar */}
+            <aside className="flex w-64 flex-col gap-4 glass-panel rounded-3xl p-4">
                 <button
-                    onClick={handleRunCoach}
-                    className="inline-flex items-center gap-2 rounded-3xl bg-accentTeal px-5 py-3 text-sm font-semibold text-darkBg transition hover:bg-cyan-500"
+                    onClick={handleNewThread}
+                    className="flex items-center gap-2 rounded-xl bg-accentTeal px-4 py-2 text-sm font-semibold text-darkBg transition hover:bg-cyan-500"
                 >
-                    {loading ? 'Generating advice...' : 'Run AI Coach'}
-                    <Sparkles className="h-4 w-4" />
+                    <Plus className="h-4 w-4" /> New Conversation
                 </button>
-            </div>
+                <div className="flex-1 overflow-y-auto space-y-2">
+                    {loadingThreads ? (
+                        <div className="flex justify-center p-4"><Loader2 className="h-4 w-4 animate-spin text-slate-400" /></div>
+                    ) : (
+                        threads.map(thread => (
+                            <button
+                                key={thread.id}
+                                onClick={() => setActiveThreadId(thread.id)}
+                                className={`flex w-full items-center gap-2 rounded-xl p-3 text-left text-sm transition ${activeThreadId === thread.id ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-900/50 hover:text-slate-300'}`}
+                            >
+                                <MessageSquare className="h-4 w-4 shrink-0" />
+                                <span className="truncate">{thread.title || 'Conversation'}</span>
+                            </button>
+                        ))
+                    )}
+                </div>
+            </aside>
 
-            <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-                <section className="glass-panel rounded-3xl p-6">
-                    <div className="flex items-center gap-3 text-white">
-                        <GraduationCap className="h-5 w-5" />
-                        <h2 className="text-lg font-semibold">Target Role</h2>
-                    </div>
-                    <input
-                        className="mt-4 w-full rounded-3xl border border-cardBorder bg-slate-950/80 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-500"
-                        value={targetRole}
-                        onChange={e => setTargetRole(e.target.value)}
-                        placeholder="Enter the role you are targeting"
-                    />
+            {/* Chat Area */}
+            <section className="flex flex-1 flex-col glass-panel rounded-3xl p-6">
+                <div className="flex items-center gap-2 mb-6">
+                    <Sparkles className="h-5 w-5 text-accentTeal" />
+                    <h1 className="text-xl font-semibold text-white">Career Copilot</h1>
+                </div>
 
-                    <div className="mt-8 space-y-4">
-                        <div className="rounded-3xl border border-cardBorder bg-slate-950/80 p-5">
-                            <div className="flex items-center gap-2 text-slate-200">
-                                <Compass className="h-4 w-4" />
-                                <span className="font-semibold">Roadmap</span>
-                            </div>
-                            <div className="mt-4 space-y-3">
-                                {roadmap.map(item => (
-                                    <div key={item.skill} className="rounded-3xl bg-slate-900/80 p-4">
-                                        <div className="flex items-center justify-between gap-4">
-                                            <div>
-                                                <p className="text-sm text-slate-400">{item.skill}</p>
-                                                <p className="mt-1 text-sm text-slate-500">Priority: {item.priority}</p>
+                <div className="flex-1 overflow-y-auto space-y-6 pr-4 mb-4">
+                    {loadingMessages ? (
+                        <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-slate-400" /></div>
+                    ) : messages.length === 0 ? (
+                        <div className="flex h-full flex-col items-center justify-center text-center text-slate-400">
+                            <Sparkles className="h-12 w-12 mb-4 opacity-50" />
+                            <p>Ask me anything about your career, applications, or skills.</p>
+                        </div>
+                    ) : (
+                        messages.map((msg) => (
+                            <div key={msg.id} className={`flex ${msg.role === 'USER' ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-[80%] rounded-2xl p-4 ${msg.role === 'USER' ? 'bg-accentTeal text-darkBg' : 'bg-slate-800 text-slate-200'}`}>
+                                    <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+                                    
+                                    {/* Display Evidence if available */}
+                                    {msg.evidence && msg.evidence.length > 0 && (
+                                        <div className="mt-4 space-y-2 border-t border-slate-700/50 pt-3">
+                                            <div className="flex items-center gap-1 text-xs font-semibold text-slate-400">
+                                                <Info className="h-3 w-3" /> Evidence Context
                                             </div>
-                                            <span className="rounded-full bg-slate-700 px-3 py-1 text-xs text-slate-200">
-                                                {item.estimated_weeks} weeks
-                                            </span>
+                                            <div className="flex flex-wrap gap-2">
+                                                {msg.evidence.map((ev: any, idx: number) => (
+                                                    <span key={idx} className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-300">
+                                                        {ev.label}: {ev.value}
+                                                    </span>
+                                                ))}
+                                            </div>
                                         </div>
-                                        <div className="mt-3 text-sm text-slate-300">
-                                            {item.resources.join(', ')}
+                                    )}
+
+                                    {/* Display Recommendations if available */}
+                                    {msg.recommendations && msg.recommendations.length > 0 && (
+                                        <div className="mt-4 space-y-2 border-t border-slate-700/50 pt-3">
+                                            <div className="text-xs font-semibold text-emerald-400">Recommendations</div>
+                                            <ul className="list-disc pl-4 text-sm">
+                                                {msg.recommendations.map((rec: string, idx: number) => (
+                                                    <li key={idx}>{rec}</li>
+                                                ))}
+                                            </ul>
                                         </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
+                                    )}
 
-                        <div className="rounded-3xl border border-cardBorder bg-slate-950/80 p-5">
-                            <div className="flex items-center gap-2 text-slate-200">
-                                <FileQuestion className="h-4 w-4" />
-                                <span className="font-semibold">Interview Prep</span>
-                            </div>
-                            <div className="mt-4 space-y-3 text-sm text-slate-300">
-                                <div>
-                                    <p className="text-slate-400">Behavioral Questions</p>
-                                    <ul className="list-disc space-y-2 pl-5">
-                                        {prep.behavioral_questions.map((question, index) => (
-                                            <li key={index}>{question}</li>
-                                        ))}
-                                    </ul>
-                                </div>
-                                <div>
-                                    <p className="text-slate-400">Technical Focus</p>
-                                    <ul className="list-disc space-y-2 pl-5">
-                                        {prep.technical_questions.map((question, index) => (
-                                            <li key={index}>{question}</li>
-                                        ))}
-                                    </ul>
-                                </div>
-                                <div>
-                                    <p className="text-slate-400">Tips</p>
-                                    <ul className="list-disc space-y-2 pl-5">
-                                        {prep.tips.map((tip, index) => (
-                                            <li key={index}>{tip}</li>
-                                        ))}
-                                    </ul>
+                                    {/* Display Warnings if available */}
+                                    {msg.warnings && msg.warnings.length > 0 && (
+                                        <div className="mt-4 space-y-2 border-t border-slate-700/50 pt-3">
+                                            <div className="text-xs font-semibold text-amber-400">Warnings</div>
+                                            <ul className="list-disc pl-4 text-sm">
+                                                {msg.warnings.map((warn: string, idx: number) => (
+                                                    <li key={idx}>{warn}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-                        </div>
-                    </div>
-                </section>
-
-                <aside className="glass-panel rounded-3xl p-6">
-                    <div className="flex items-center gap-3 text-white">
-                        <CheckSquare className="h-5 w-5" />
-                        <h2 className="text-lg font-semibold">Progress Tracker</h2>
-                    </div>
-                    <div className="mt-6 space-y-4 text-slate-300">
-                        <div className="rounded-3xl border border-cardBorder bg-slate-950/80 p-5">
-                            <div className="flex items-center gap-2 text-slate-200">
-                                <Lightbulb className="h-4 w-4" />
-                                <span>Strengths</span>
+                        ))
+                    )}
+                    {sending && (
+                        <div className="flex justify-start">
+                            <div className="max-w-[80%] rounded-2xl bg-slate-800 p-4 text-slate-200">
+                                <Loader2 className="h-4 w-4 animate-spin" />
                             </div>
-                            <p className="mt-3 text-sm text-slate-300">Focus on cloud-native architectures, developer experience, and automated infrastructure workflows.</p>
                         </div>
+                    )}
+                    <div ref={messagesEndRef} />
+                </div>
 
-                        <div className="rounded-3xl border border-cardBorder bg-slate-950/80 p-5">
-                            <div className="flex items-center gap-2 text-slate-200">
-                                <Award className="h-4 w-4" />
-                                <span>Outcome</span>
-                            </div>
-                            <p className="mt-3 text-sm text-slate-300">Use your roadmap to improve interview readiness and secure the next step toward the target role.</p>
-                        </div>
-
-                        <div className="rounded-3xl border border-cardBorder bg-slate-950/80 p-5">
-                            <div className="flex items-center gap-2 text-slate-200">
-                                <Sparkles className="h-4 w-4" />
-                                <span>{gapsChecked ? 'Gaps reviewed' : 'Gaps review pending'}</span>
-                            </div>
-                            <p className="mt-3 text-sm text-slate-300">
-                                {gapsChecked
-                                    ? 'Your current profile has been analyzed against the desired role.'
-                                    : 'Run the AI Coach to identify training and interview gaps.'}
-                            </p>
-                        </div>
-                    </div>
-                </aside>
-            </div>
+                <div className="relative mt-auto">
+                    <textarea
+                        value={input}
+                        onChange={e => setInput(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                            }
+                        }}
+                        placeholder="Ask Copilot..."
+                        className="w-full resize-none rounded-2xl border border-cardBorder bg-slate-950/80 p-4 pr-24 text-sm text-white outline-none transition focus:border-accentTeal"
+                        rows={3}
+                        disabled={sending}
+                    />
+                    <button
+                        onClick={handleSend}
+                        disabled={sending || !input.trim()}
+                        className="absolute bottom-4 right-4 rounded-xl bg-accentTeal px-4 py-2 text-sm font-semibold text-darkBg transition hover:bg-cyan-500 disabled:opacity-50"
+                    >
+                        Send
+                    </button>
+                </div>
+            </section>
         </div>
     );
 }
-

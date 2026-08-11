@@ -83,13 +83,26 @@ def _scrape_greenhouse(url: str) -> dict:
     description_section = soup.find('div', class_='content')
     description = description_section.get_text(separator="\n").strip() if description_section else ""
 
-    # Simple requirement extraction: look for <li> under a heading containing “Requirements”
+    # Requirements extraction using Taxonomy normalization
     requirements = {}
     req_heading = soup.find(lambda t: t.name in ["h2", "h3"] and "require" in t.text.lower())
     if req_heading:
         ul = req_heading.find_next_sibling('ul')
         if ul:
-            requirements = {"items": [li.text.strip() for li in ul.find_all('li')]}
+            raw_items = [li.text.strip() for li in ul.find_all('li')]
+            try:
+                from learning.services.taxonomy import SkillRequirementNormalizationService
+                canonical_items = []
+                for item in raw_items:
+                    # We tokenize the requirement to find actual skills rather than full sentences
+                    # A naive approach for integration demonstration
+                    normalized = SkillRequirementNormalizationService.normalize_skill(item)
+                    if normalized and normalized != item.title(): 
+                        canonical_items.append(normalized)
+                if canonical_items:
+                    requirements = {"items": list(set(canonical_items))}
+            except Exception:
+                requirements = {"items": raw_items}
 
     return {
         "title": title,
@@ -117,13 +130,30 @@ def _scrape_ashby(url: str) -> dict:
 
     description = "\n".join(p.text.strip() for p in soup.find_all('p'))
 
+    # Extraction of requirements
+    requirements = {}
+    try:
+        from learning.services.taxonomy import SkillRequirementNormalizationService
+        canonical_items = []
+        for ul in soup.find_all('ul'):
+            for li in ul.find_all('li'):
+                text = li.text.strip()
+                normalized = SkillRequirementNormalizationService.normalize_skill(text)
+                # If the normalization changed it, we assume it's a valid canonical skill
+                if normalized and normalized != text.title():
+                    canonical_items.append(normalized)
+        if canonical_items:
+            requirements = {"items": list(set(canonical_items))}
+    except Exception:
+        pass
+
     return {
         "title": title,
         "company": company,
         "location": location,
         "portal_type": "Ashby",
         "description": description,
-        "requirements": {},  # Placeholder – real implementation would parse lists
+        "requirements": requirements,
     }
 
 

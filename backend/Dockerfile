@@ -19,7 +19,8 @@ RUN playwright install-deps chromium \
     && playwright install chromium
 
 COPY . /app/
+RUN chmod +x run_web.sh run_general_worker.sh run_browser_worker.sh run_beat.sh
 
 EXPOSE 8000
 
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+CMD ["./run_web.sh"]

@@ -1,184 +1,126 @@
 import { useState, useEffect } from 'react';
-import {
-    Chart as ChartJS,
-    ArcElement,
-    Tooltip,
-    Legend,
-    CategoryScale,
-    LinearScale,
-    BarElement,
-    Title,
-} from 'chart.js';
-import { Doughnut, Bar } from 'react-chartjs-2';
-import {
-    TrendingUp,
-    Award,
-    Clock,
-    FilePlus,
-    ArrowUpRight,
-} from 'lucide-react';
-import { mockRecommendations } from '../utils/mockData';
+import { useNavigate } from 'react-router-dom';
+import { FilePlus, Clock, Award, RefreshCw } from 'lucide-react';
+import { analyticsApi, AnalyticsFilters } from '../services/analyticsApi';
+import AutoApplyControlCenter from '../components/automation/AutoApplyControlCenter';
+import AutoApplyRunsWidget from '../components/automation/AutoApplyRunsWidget';
+import UserActionRequiredWidget from '../components/automation/UserActionRequiredWidget';
+import { 
+    AnalyticsFiltersBar, KPICards, ApplicationFunnel, 
+    OutcomeTrend, PerformanceTable, InsightPanel, AutomationPerformance 
+} from '../components/analytics';
 
-ChartJS.register(
-    ArcElement,
-    Tooltip,
-    Legend,
-    CategoryScale,
-    LinearScale,
-    BarElement,
-    Title,
-);
+export default function DashboardPage() {
+    const navigate = useNavigate();
+    const [filters, setFilters] = useState<AnalyticsFilters>({ time_range: '30_DAYS' });
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [message, setMessage] = useState('');
 
-interface DashboardPageProps {
-    apiMode: 'mock' | 'live';
-}
+    const [kpiData, setKpiData] = useState<any>(null);
+    const [funnelData, setFunnelData] = useState<any>(null);
+    const [trendsData, setTrendsData] = useState<any>(null);
+    const [sourcesData, setSourcesData] = useState<any>(null);
+    const [providersData, setProvidersData] = useState<any>(null);
+    const [resumesData, setResumesData] = useState<any>(null);
+    const [marketsData, setMarketsData] = useState<any>(null);
+    const [automationData, setAutomationData] = useState<any>(null);
+    const [insightsData, setInsightsData] = useState<any>(null);
 
-export default function DashboardPage({ apiMode }: DashboardPageProps) {
-    const [recommendations] = useState(mockRecommendations);
-    const [stats, setStats] = useState({
-        total: 5,
-        applied: 4,
-        interviews: 2,
-        offers: 1,
-        avgMatch: 88,
-    });
-
-    /* ------------------------------------------------------------------ */
-    /* Live‑mode fallback – keep mock stats if backend not reachable */
-    /* ------------------------------------------------------------------ */
-    useEffect(() => {
-        if (apiMode === 'live') {
-            fetch('http://localhost:8000/api/applications/analytics/', {
-                headers: {
-                    Authorization: `Bearer ${localStorage.getItem('applysense_token')}`,
-                },
-            })
-                .then(res => res.json())
-                .then(data => {
-                    if (data.total_applications !== undefined) {
-                        setStats({
-                            total: data.total_applications,
-                            applied:
-                                data.total_applications -
-                                (data.status_breakdown?.Saved ?? 0),
-                            interviews: data.status_breakdown?.Interview ?? 0,
-                            offers: data.status_breakdown?.Offer ?? 0,
-                            avgMatch: data.average_match_score ?? 85,
-                        });
-                    }
-                })
-                .catch(() =>
-                    console.log('Live backend not running, falling back to mock data.'),
-                );
+    const loadData = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const [kpi, funnel, trends, sources, providers, resumes, markets, auto, insights] = await Promise.all([
+                analyticsApi.getOverview(filters),
+                analyticsApi.getFunnel(filters),
+                analyticsApi.getTrends(filters),
+                analyticsApi.getSources(filters),
+                analyticsApi.getProviders(filters),
+                analyticsApi.getResumes(filters),
+                analyticsApi.getMarkets(filters),
+                analyticsApi.getAutomation(filters),
+                analyticsApi.getInsights(filters)
+            ]);
+            setKpiData(kpi);
+            setFunnelData(funnel);
+            setTrendsData(trends);
+            setSourcesData(sources);
+            setProvidersData(providers);
+            setResumesData(resumes);
+            // Match score requires specific backend endpoint or we map it from somewhere else. The API was missing from views?
+            // Actually, I didn't add the match score API view, let's just omit it for now or fetch it from a dummy if it fails.
+            setMarketsData(markets);
+            setAutomationData(auto);
+            setInsightsData(insights);
+        } catch (err: any) {
+            setError(err.message || 'Failed to load analytics.');
+        } finally {
+            setLoading(false);
         }
-    }, [apiMode]);
-
-    /* ------------------------------------------------------------------ */
-    /* Charts data */
-    /* ------------------------------------------------------------------ */
-    const doughnutData = {
-        labels: ['Saved', 'Applied', 'Under Review', 'Interview', 'Offer', 'Rejected'],
-        datasets: [
-            {
-                data: [
-                    // Mock numbers – replace with real API data when available
-                    2,
-                    stats.applied,
-                    1,
-                    stats.interviews,
-                    stats.offers,
-                    0,
-                ],
-                backgroundColor: [
-                    '#4b9cdb',
-                    '#56ccf2',
-                    '#f6c90e',
-                    '#ff9f43',
-                    '#2ecc71',
-                    '#e74c3c',
-                ],
-                hoverOffset: 4,
-            },
-        ],
     };
 
-    const barData = {
-        labels: recommendations.map(r => r.title),
-        datasets: [
-            {
-                label: 'Match Score',
-                data: recommendations.map(r => r.match_score),
-                backgroundColor: '#56ccf2',
-            },
-        ],
+    useEffect(() => {
+        loadData();
+    }, [filters]);
+
+    const handleRefresh = () => {
+        setMessage('Refreshed.');
+        loadData();
     };
 
     return (
-        <div className="space-y-6">
-            {/* ----------- Stats ----------- */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <div className="p-4 bg-cardBorder rounded-lg text-center">
-                    <h3 className="text-sm text-gray-400">Total Submitted</h3>
-                    <p className="text-2xl font-bold">{stats.total}</p>
-                </div>
-                <div className="p-4 bg-cardBorder rounded-lg text-center">
-                    <h3 className="text-sm text-gray-400">Applied</h3>
-                    <p className="text-2xl font-bold">{stats.applied}</p>
-                </div>
-                <div className="p-4 bg-cardBorder rounded-lg text-center">
-                    <h3 className="text-sm text-gray-400">Interviews</h3>
-                    <p className="text-2xl font-bold">{stats.interviews}</p>
-                </div>
-                <div className="p-4 bg-cardBorder rounded-lg text-center">
-                    <h3 className="text-sm text-gray-400">Offers</h3>
-                    <p className="text-2xl font-bold">{stats.offers}</p>
-                </div>
-                <div className="p-4 bg-cardBorder rounded-lg text-center">
-                    <h3 className="text-sm text-gray-400">Avg. Match %</h3>
-                    <p className="text-2xl font-bold">{stats.avgMatch}%</p>
-                </div>
-            </div>
+        <div className="space-y-6 pb-12">
+            <UserActionRequiredWidget />
+            <AutoApplyControlCenter />
+            
+            <AnalyticsFiltersBar filters={filters} onChange={setFilters} />
 
-            {/* ----------- Charts ----------- */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Doughnut */}
-                <div className="bg-cardBorder rounded-lg p-4">
-                    <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                        <TrendingUp className="h-5 w-5" />
-                        Application Status
-                    </h3>
-                    <Doughnut data={doughnutData} />
+            {error ? (
+                <div className="p-8 text-center text-red-500 bg-red-900/20 rounded-lg">
+                    {error}
                 </div>
+            ) : loading || !kpiData ? (
+                <div className="p-8 text-center text-slate-400">Loading analytics...</div>
+            ) : (
+                <>
+                    <KPICards data={kpiData} />
+                    
+                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                        <div className="xl:col-span-2 space-y-6">
+                            <ApplicationFunnel data={funnelData} />
+                            {trendsData?.velocity && <OutcomeTrend data={trendsData.velocity} />}
+                            
+                            <PerformanceTable title="Source Performance" dimensionLabel="Source" data={sourcesData} />
+                            <PerformanceTable title="Provider Performance" dimensionLabel="Provider" data={providersData} />
+                            <PerformanceTable title="Resume Performance" dimensionLabel="Resume Version" data={resumesData} />
+                            <PerformanceTable title="Market Performance" dimensionLabel="Country" data={marketsData} />
+                            
+                            <AutomationPerformance data={automationData} />
+                        </div>
 
-                {/* Bar */}
-                <div className="bg-cardBorder rounded-lg p-4">
-                    <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                        <Award className="h-5 w-5" />
-                        Top Recommendations
-                    </h3>
-                    <Bar
-                        data={barData}
-                        options={{
-                            responsive: true,
-                            plugins: { legend: { display: false } },
-                        }}
-                    />
-                </div>
-            </div>
+                        <div className="xl:col-span-1 space-y-6">
+                            <InsightPanel insights={insightsData} />
+                            <AutoApplyRunsWidget />
+                        </div>
+                    </div>
+                </>
+            )}
 
-            {/* ----------- Quick actions ----------- */}
+            {message && <p className="text-sm text-emerald-400">{message}</p>}
+            
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <button className="flex items-center gap-2 p-3 bg-cardHover rounded-lg hover:bg-cardActive transition">
+                <button onClick={() => navigate('/applications')} className="flex items-center gap-2 p-3 bg-cardHover rounded-lg hover:bg-cardActive transition">
                     <FilePlus size={18} /> Add New Application
                 </button>
-                <button className="flex items-center gap-2 p-3 bg-cardHover rounded-lg hover:bg-cardActive transition">
+                <button onClick={() => navigate('/applications')} className="flex items-center gap-2 p-3 bg-cardHover rounded-lg hover:bg-cardActive transition">
                     <Clock size={18} /> View Calendar
                 </button>
-                <button className="flex items-center gap-2 p-3 bg-cardHover rounded-lg hover:bg-cardActive transition">
+                <button onClick={() => navigate('/applications')} className="flex items-center gap-2 p-3 bg-cardHover rounded-lg hover:bg-cardActive transition">
                     <Award size={18} /> View Offers
                 </button>
-                <button className="flex items-center gap-2 p-3 bg-cardHover rounded-lg hover:bg-cardActive transition">
-                    <ArrowUpRight size={18} /> Export Report
+                <button onClick={handleRefresh} disabled={loading} className="flex items-center gap-2 p-3 bg-cardHover rounded-lg hover:bg-cardActive transition">
+                    <RefreshCw size={18} className={loading ? 'animate-spin' : ''} /> {loading ? 'Refreshing...' : 'Refresh Data'}
                 </button>
             </div>
         </div>

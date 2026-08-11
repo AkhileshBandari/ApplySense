@@ -1,107 +1,83 @@
-import json
 import logging
 from rest_framework import views, status, permissions, generics
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.shortcuts import get_object_or_404
-from .models import Resume
-from .serializers import ResumeSerializer
-from .parser import (
-    extract_text_from_pdf,
-    extract_text_from_docx,
-    calculate_resume_health,
-    calculate_ats_compatibility,
-)
+from django.http import HttpResponse
+from .models import Resume, ResumeAnalysis, ResumeVersion, TailoringChange
+from jobs.models import Job
+from .serializers import ResumeSerializer, ResumeAnalysisSerializer, ResumeVersionSerializer, TailoringChangeSerializer
+from .services.extraction import extract_text, ExtractionError
+from .services.parsing import ResumeParserService, ParsingError
+from .services.provenance import ProvenanceService
+from .services.analysis import ResumeAnalysisService
+from .services.tailoring import ResumeTailoringService
+from .services.rendering import ResumeRenderingService
 
 from ai_engine.fallback_manager import AIFallbackManager
 from ai_engine import prompts
 
+import logging
 logger = logging.getLogger(__name__)
 
-
 class ResumeUploadView(views.APIView):
-    """Handle resume file uploads, extract text, compute health scores, and run AI parsing.
-
-    The endpoint expects a multipart/form‑data request with a ``file`` field containing a PDF or DOCX.
-    It saves the file, extracts the raw text, calculates health/ATS scores, then invokes the
-    ``AIFallbackManager`` to generate a structured JSON analysis of the resume.
-    """
+    """Handle resume file uploads, extract text, run AI parsing, and generate UNVERIFIED candidate facts."""
 
     permission_classes = (permissions.IsAuthenticated,)
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request, *args, **kwargs):
-        # ------------------------------------------------------------------
-        #   Validate upload
-        # ------------------------------------------------------------------
         if "file" not in request.FILES:
             return Response({"error": "No file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
 
         file_obj = request.FILES["file"]
         file_name = file_obj.name
 
-        # ------------------------------------------------------------------
-        #   Persist the raw file so that it can be served later
-        # ------------------------------------------------------------------
         resume = Resume.objects.create(
             user=request.user,
             file=file_obj,
             file_name=file_name,
+            status='EXTRACTING'
         )
-
         file_path = resume.file.path
 
-        # ------------------------------------------------------------------
-        #   Extract raw text based on file type
-        # ------------------------------------------------------------------
-        text = ""
-        if file_name.lower().endswith(".pdf"):
-            text = extract_text_from_pdf(file_path)
-        elif file_name.lower().endswith(".docx"):
-            text = extract_text_from_docx(file_path)
-        else:
-            # Fallback – try to read the uploaded bytes as UTF‑8 text
-            try:
-                text = file_obj.read().decode("utf-8", errors="ignore")
-            except Exception as exc:  # pragma: no cover – extremely unlikely
-                logger.exception("Failed to read raw upload %s", file_name)
-                text = ""
-
-        # ------------------------------------------------------------------
-        #   Compute health & ATS compatibility scores (simple heuristics)
-        # ------------------------------------------------------------------
-        resume.parsed_text = text
-        resume.health_score = calculate_resume_health(text)
-        resume.ats_score = calculate_ats_compatibility(text)
-        resume.save()
-
-        # ------------------------------------------------------------------
-        #   Run AI‑driven parsing – this may be a long operation, but we treat it
-        #   synchronously for simplicity. In production you would push this to a
-        #   background worker.
-        # ------------------------------------------------------------------
-        ai = AIFallbackManager()
-        system_prompt = prompts.RESUME_PARSE_SYSTEM_PROMPT
-        user_prompt = prompts.RESUME_PARSE_USER_PROMPT.format(resume_text=text)
+        # 1. Extraction
         try:
-            ai_raw = ai.generate_content(
-                system_prompt, user_prompt, response_format_json=True
-            )
-            parsed = json.loads(ai_raw.strip())
-        except Exception as exc:  # pragma: no cover – defensive fallback
-            logger.exception("AI resume parsing failed")
-            parsed = {"raw_output": ai_raw if "ai_raw" in locals() else ""}
+            text = extract_text(file_path, file_name)
+            resume.parsed_text = text
+            resume.status = 'PARSING'
+            resume.save()
+        except ExtractionError as e:
+            resume.status = 'FAILED'
+            resume.parsing_error = str(e)
+            resume.save()
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ------------------------------------------------------------------
-        #   Return a combined payload – the original serializer plus the AI
-        #   analysis. Clients can decide what they need.
-        # ------------------------------------------------------------------
+        # 2. Parsing
+        try:
+            parser = ResumeParserService()
+            parsed_data = parser.parse_resume(text)
+            resume.parsed_data = parsed_data
+            resume.status = 'REVIEW_REQUIRED'
+            resume.save()
+        except ParsingError as e:
+            resume.status = 'FAILED'
+            resume.parsing_error = str(e)
+            resume.save()
+            return Response({"error": str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        # 3. Provenance Import
+        try:
+            ProvenanceService.import_parsed_resume(request.user, resume, parsed_data)
+        except Exception as e:
+            logger.exception("Provenance import failed")
+            return Response({"error": f"Failed to import facts: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         payload = {
             "resume": ResumeSerializer(resume).data,
-            "analysis": parsed,
+            "analysis": parsed_data,
         }
         return Response(payload, status=status.HTTP_201_CREATED)
-
 
 class ResumeListView(generics.ListAPIView):
     """List all resumes belonging to the authenticated user."""
@@ -110,7 +86,10 @@ class ResumeListView(generics.ListAPIView):
     serializer_class = ResumeSerializer
 
     def get_queryset(self):
-        return Resume.objects.filter(user=self.request.user).order_by("-created_at")
+        # We assume there's a created_at, but the model has uploaded_at.
+        # Wait, the old code ordered by '-created_at', but the model has 'uploaded_at'. 
+        # I'll fix it to '-uploaded_at'.
+        return Resume.objects.filter(user=self.request.user).order_by("-uploaded_at")
 
 class ResumeDetailView(views.APIView):
     permission_classes = (permissions.IsAuthenticated,)
@@ -127,49 +106,128 @@ class ResumeDetailView(views.APIView):
             status=status.HTTP_200_OK
         )
 
-class ResumeTailorView(views.APIView):
+class ResumeAnalyzeView(views.APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
-    def post(self, request):
-        resume_id = request.data.get("resume_id")
-        job_description = request.data.get("job_description")
+    def post(self, request, pk):
+        resume = get_object_or_404(Resume, pk=pk, user=request.user)
+        try:
+            analysis = ResumeAnalysisService.analyze_general(resume)
+            return Response(ResumeAnalysisSerializer(analysis).data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if not resume_id or not job_description:
-            return Response(
-                {
-                    "error": "resume_id and job_description are required"
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+
+class JobSpecificAnalysisView(views.APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, pk, job_id):
+        resume = get_object_or_404(Resume, pk=pk, user=request.user)
+        job = get_object_or_404(Job, pk=job_id)
+        try:
+            analysis = ResumeAnalysisService.analyze_job_specific(resume, job)
+            return Response(ResumeAnalysisSerializer(analysis).data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ResumeTailoringGenerateView(views.APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, pk, job_id=None):
+        resume = get_object_or_404(Resume, pk=pk, user=request.user)
+        
+        # If job_id is provided, use it. Otherwise, dynamically create a job.
+        if job_id:
+            job = get_object_or_404(Job, pk=job_id)
+        else:
+            job_desc = request.data.get('job_description')
+            job_title = request.data.get('job_title', 'Unknown Title')
+            job_company = request.data.get('job_company', 'Unknown Company')
+            
+            if not job_desc:
+                return Response({"error": "job_description is required if job_id is not provided"}, status=status.HTTP_400_BAD_REQUEST)
+                
+            job = Job.objects.create(
+                title=job_title,
+                company=job_company,
+                description=job_desc,
+                portal_type='Manual'
             )
-
-        resume = get_object_or_404(
-            Resume,
-            pk=resume_id,
-            user=request.user,
-        )
-
-        ai = AIFallbackManager()
 
         try:
-            result = ai.generate_content(
-                prompts.RESUME_TAILOR_SYSTEM_PROMPT,
-                f"""
-Resume:
-{resume.parsed_text}
-
-Job Description:
-{job_description}
-""",
-                response_format_json=True,
-            )
-
-            return Response(
-                {"tailored_resume": result},
-                status=status.HTTP_200_OK,
-            )
-
+            version = ResumeTailoringService.generate_tailored_version(resume, job)
+            return Response(ResumeVersionSerializer(version).data, status=status.HTTP_201_CREATED)
         except Exception as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class TailoringChangeReviewView(views.APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def patch(self, request, change_id):
+        # We need to ensure the user owns this change (via the version -> resume)
+        change = get_object_or_404(TailoringChange, pk=change_id, version__user=request.user)
+        
+        user_decision = request.data.get('user_decision')
+        proposed_text = request.data.get('proposed_text')
+
+        if user_decision in dict(TailoringChange.USER_DECISIONS).keys():
+            change.user_decision = user_decision
+        
+        if proposed_text is not None and proposed_text != change.proposed_text:
+            # Re-validate user edit against CandidateContextService
+            from profiles.services.candidate_context import CandidateContextService
+            from resumes.services.claim_validation import ClaimValidationService
+            import json
+
+            context_service = CandidateContextService()
+            verified_context = context_service.get_for_user(request.user)
+            verified_context_json = json.dumps(verified_context, default=str)
+            
+            validation_status = ClaimValidationService.validate_claim(
+                verified_evidence_text=verified_context_json,
+                proposed_claim=proposed_text
             )
+
+            if validation_status == "UNSUPPORTED":
+                return Response(
+                    {"error": "The proposed text contains unverified facts not found in your profile."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            change.proposed_text = proposed_text
+            change.validation_status = validation_status
+            change.user_decision = 'EDITED'
+
+        change.save()
+        return Response(TailoringChangeSerializer(change).data, status=status.HTTP_200_OK)
+
+
+class ResumeVersionApproveView(views.APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request, version_id):
+        version = get_object_or_404(ResumeVersion, pk=version_id, user=request.user)
+        try:
+            version = ResumeTailoringService.approve_version(version)
+            return Response(ResumeVersionSerializer(version).data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ResumeVersionDownloadView(views.APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request, version_id):
+        version = get_object_or_404(ResumeVersion, pk=version_id, user=request.user)
+        try:
+            file_stream = ResumeRenderingService.render_docx(version)
+            response = HttpResponse(
+                file_stream.read(),
+                content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            )
+            response['Content-Disposition'] = f'attachment; filename="tailored_resume_{version.id}.docx"'
+            return response
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

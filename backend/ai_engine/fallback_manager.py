@@ -68,15 +68,58 @@ class AIFallbackManager:
                 logger.error(err_msg)
         raise RuntimeError("All providers failed: " + "; ".join(errors))
 
-    # Placeholder methods for each provider – to be implemented later
     def _call_openai(self, system_prompt, user_prompt, json_format):
-        raise NotImplementedError
+        headers = {"Authorization": f"Bearer {self.openai_key}", "Content-Type": "application/json"}
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        }
+        if json_format:
+            data["response_format"] = {"type": "json_object"}
+        res = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data, timeout=30)
+        res.raise_for_status()
+        return res.json()["choices"][0]["message"]["content"]
 
     def _call_groq(self, system_prompt, user_prompt, json_format):
-        raise NotImplementedError
+        headers = {"Authorization": f"Bearer {self.groq_key}", "Content-Type": "application/json"}
+        data = {
+            "model": "llama3-8b-8192",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        }
+        if json_format:
+            data["response_format"] = {"type": "json_object"}
+        res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, timeout=30)
+        res.raise_for_status()
+        return res.json()["choices"][0]["message"]["content"]
 
     def _call_openrouter(self, system_prompt, user_prompt, json_format):
-        raise NotImplementedError
+        headers = {"Authorization": f"Bearer {self.openrouter_key}", "Content-Type": "application/json"}
+        data = {
+            "model": "openrouter/auto",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        }
+        if json_format:
+            data["response_format"] = {"type": "json_object"}
+        res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data, timeout=30)
+        res.raise_for_status()
+        return res.json()["choices"][0]["message"]["content"]
 
     def _call_huggingface(self, system_prompt, user_prompt):
-        raise NotImplementedError
+        headers = {"Authorization": f"Bearer {self.hf_key}", "Content-Type": "application/json"}
+        prompt = f"System: {system_prompt}\nUser: {user_prompt}\nAssistant:"
+        payload = {
+            "inputs": prompt,
+            "parameters": {"max_new_tokens": 1024, "return_full_text": False}
+        }
+        res = requests.post("https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2", headers=headers, json=payload, timeout=30)
+        res.raise_for_status()
+        return res.json()[0]["generated_text"]

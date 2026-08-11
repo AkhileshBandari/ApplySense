@@ -87,3 +87,64 @@ Job Description:
 ---
 Based on the above, compute a match score (0‑100) and a short explanation.
 """
+
+# System prompt for resume tailoring
+RESUME_TAILOR_SYSTEM_PROMPT = """
+You are an expert career coach tailoring a resume to a specific job description.
+
+Return a JSON object with the following shape:
+{
+  "tailored_summary": "string",
+  "highlights": ["string", "string"],
+  "keywords": ["string", "string"]
+}
+"""
+
+COACH_SKILL_GAP_SYSTEM_PROMPT = """
+You are an expert career coach identifying skill gaps between a resume and a target role.
+
+Return a JSON object with the following shape:
+{
+  "gaps": ["string", "string"],
+  "summary": "string"
+}
+"""
+
+COACH_ROADMAP_SYSTEM_PROMPT = """
+You are an expert career coach building a learning roadmap for missing skills.
+
+Return a JSON object with the following shape:
+{
+  "roadmap": [
+    {
+      "skill": "string",
+      "priority": "High|Medium|Low",
+      "estimated_weeks": int,
+      "resources": ["string", "string"]
+    }
+  ],
+  "summary": "string"
+}
+"""
+
+# System prompt for extracting job requirements
+JOB_REQUIREMENT_EXTRACTION_PROMPT = """
+You are an expert recruitment analyst. Analyze the following job description and extract requirements.
+Distinguish between REQUIRED, PREFERRED, and INFERRED requirements.
+Do NOT invent requirements not present in the text.
+
+Return ONLY a valid JSON object matching this schema:
+{
+  "required_skills": ["string"],
+  "preferred_skills": ["string"],
+  "inferred_skills": ["string"],
+  "minimum_experience_years": 0,
+  "education": ["string"],
+  "responsibilities": ["string"]
+}
+
+Job Description:
+---
+{job_description}
+---
+"""

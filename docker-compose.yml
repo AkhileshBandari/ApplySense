@@ -1,13 +1,37 @@
 version: '3.8'
 
+x-backend-base: &backend-base
+  build: ./backend
+  environment:
+    - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-django-insecure-applysense-ai-super-secret-key-12345}
+    - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+    - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend_web}
+    - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost}
+    - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-http://localhost:3000,http://localhost}
+    - DATABASE_ENGINE=postgres
+    - POSTGRES_DB=${POSTGRES_DB:-applysense}
+    - POSTGRES_USER=${POSTGRES_USER:-applysense_user}
+    - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+    - POSTGRES_HOST=db
+    - POSTGRES_PORT=5432
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+    - GROQ_API_KEY=${GROQ_API_KEY}
+    - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY}
+  depends_on:
+    - db
+    - redis
+
 services:
   db:
     image: postgres:15-alpine
     container_name: applysense_db
     environment:
-      POSTGRES_DB: applysense
-      POSTGRES_USER: applysense_user
-      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ${POSTGRES_DB:-applysense}
+      POSTGRES_USER: ${POSTGRES_USER:-applysense_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -19,30 +43,39 @@ services:
     ports:
       - "6379:6379"
 
-  backend:
-    build: ./backend
-    container_name: applysense_backend
-    command: >
-      sh -c "python manage.py migrate &&
-             python manage.py runserver 0.0.0.0:8000"
+  backend_web:
+    <<: *backend-base
+    container_name: applysense_backend_web
+    command: ["./run_web.sh"]
     volumes:
       - ./backend:/app
-    environment:
-      - DATABASE_ENGINE=postgres
-      - POSTGRES_DB=applysense
-      - POSTGRES_USER=applysense_user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_HOST=db
-      - POSTGRES_PORT=5432
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY}
     ports:
       - "8000:8000"
-    depends_on:
-      - db
-      - redis
+
+  celery_general:
+    <<: *backend-base
+    container_name: applysense_celery_general
+    command: ["./run_general_worker.sh"]
+    volumes:
+      - ./backend:/app
+
+  celery_browser:
+    <<: *backend-base
+    container_name: applysense_celery_browser
+    command: ["./run_browser_worker.sh"]
+    volumes:
+      - ./backend:/app
+    # Browser worker needs shm size for headless chrome
+    shm_size: '2gb'
+
+  celery_beat:
+    <<: *backend-base
+    container_name: applysense_celery_beat
+    command: ["./run_beat.sh"]
+    volumes:
+      - ./backend:/app
+
+
 
   frontend:
     build: ./frontend
@@ -50,7 +83,7 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      - backend_web
 
 volumes:
   pgdata:
